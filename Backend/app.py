@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
+import os
 
 app = Flask(__name__)
 CORS(app)
-
 # ✅ CLASSES
 classes = ['Maize grasshoper', 'Cassava mosaic', 'Tomato septoria leaf spot', 'Cashew leaf miner', 'Maize leaf beetle',
               'Cassava bacterial blight', 'Maize streak virus', 'Cashew red rust', 'Tomato verticulium wilt', 'Tomato leaf curl',
@@ -226,21 +226,38 @@ disease_info = {
 model = models.densenet121(weights=None)
 model.classifier = nn.Linear(model.classifier.in_features, len(classes))
 
-# ✅ LOAD MODEL
-model.load_state_dict(torch.load("best_densenet_model.pth", map_location="cpu"))
-model.eval()
+# ✅ LOAD MODEL (IMPORTANT: use absolute path safe)
+MODEL_PATH = "best_densenet_model.pth"
 
+if not os.path.exists(MODEL_PATH):
+    raise Exception("Model file not found! Make sure best_densenet_model.pth is in repo")
+
+model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+model.eval()
 # ✅ TRANSFORM
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor()
 ])
 
+# ✅ HEALTH CHECK ROUTE (IMPORTANT for Render)
+@app.route('/')
+def home():
+    return "Backend is running!"
+
 # ✅ API
 @app.route('/predict', methods=['POST'])
 def predict():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
     file = request.files['file']
-    img = Image.open(file).convert('RGB')
+
+    try:
+        img = Image.open(file).convert('RGB')
+    except:
+        return jsonify({"error": "Invalid image"}), 400
+
     img = transform(img).unsqueeze(0)
 
     with torch.no_grad():
@@ -251,6 +268,7 @@ def predict():
     prediction = classes[pred.item()]
     confidence_pct = round(confidence.item() * 100, 1)
     info = disease_info.get(prediction, {})
+
     return jsonify({
         "prediction": prediction,
         "confidence": confidence_pct,
@@ -260,5 +278,7 @@ def predict():
         "pesticides": info.get("pesticides", [])
     })
 
+# ✅ IMPORTANT: Render PORT FIX
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 10000))  # Render provides PORT
+    app.run(host="0.0.0.0", port=port)
