@@ -104,7 +104,7 @@ const CameraUpload = () => {
       const blob = await res.blob();
       const formData = new FormData();
       formData.append("file", blob, "image.jpg");
-      const response = await fetch("http://127.0.0.1:5000/predict", {
+      const response = await fetch("https://resourceful-delight.up.railway.app/predict", {
         method: "POST",
         body: formData,
       });
