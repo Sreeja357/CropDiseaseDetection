@@ -104,7 +104,7 @@ const CameraUpload = () => {
       const blob = await res.blob();
       const formData = new FormData();
       formData.append("file", blob, "image.jpg");
-      const response = await fetch("https://resourceful-delight.up.railway.app/predict", {
+      const response = await fetch("https://cropdiseasedetection-wumd.onrender.com/predict", {
         method: "POST",
         body: formData,
       });
