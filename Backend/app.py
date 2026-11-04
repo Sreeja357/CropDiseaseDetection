@@ -3,14 +3,26 @@ from flask_cors import CORS
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
+import io
+import os
 
 app = Flask(__name__)
 CORS(app)
 
+# ✅ Reject uploads larger than 10 MB at the Flask level
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+app.config["MAX_CONTENT_LENGTH"] = MAX_IMAGE_SIZE
+
+
+@app.errorhandler(413)
+def file_too_large(error):
+    """Handles requests that exceed MAX_CONTENT_LENGTH."""
+    return jsonify({"error": "Image is too large. Maximum allowed size is 10 MB."}), 413
+
 # ✅ CLASSES
 classes = ['Maize grasshoper', 'Cassava mosaic', 'Tomato septoria leaf spot', 'Cashew leaf miner', 'Maize leaf beetle',
-              'Cassava bacterial blight', 'Maize streak virus', 'Cashew red rust', 'Tomato verticulium wilt', 'Tomato leaf curl',
+              'Cassava bacterial blight', 'Maize streak virus', 'Cashew red rust', 'Tomato verticillium wilt', 'Tomato leaf curl',
               'Maize leaf spot', 'Maize fall armyworm', 'Cassava healthy', 'Cashew anthracnose', 'Maize healthy', 'Tomato leaf blight',
               'Maize leaf blight', 'Cassava green mite', 'Cashew healthy', 'Cashew gumosis', 'Tomato healthy', 'Cassava brown spot']
 
@@ -96,7 +108,7 @@ disease_info = {
             {"name": "Mancozeb 75% WP", "dosage": "2.5 grams per liter of water", "application": "Foliar spray at 10-14 day intervals", "type": "Fungicide"}
         ]
     },
-    "Tomato verticulium wilt": {
+    "Tomato verticillium wilt": {
         "severity": "High",
         "description": "Verticillium wilt is caused by the soil-borne fungus Verticillium dahliae. It infects tomato plants through roots and blocks water-conducting vessels, causing wilting, yellowing, and eventual plant death.",
         "symptoms": ["V-shaped yellowing on leaf margins", "One-sided wilting of plant", "Brown discoloration of vascular tissue", "Progressive wilting despite adequate moisture"],
@@ -222,43 +234,154 @@ disease_info = {
     }
 }
 
-# ✅ MODEL
+# ✅ MODEL — build absolute path so it works regardless of CWD
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "best_densenet_model.pth")
+
+if not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(
+        f"Model file not found at: {MODEL_PATH}\n"
+        "Please ensure 'best_densenet_model.pth' is in the Backend directory."
+    )
+
 model = models.densenet121(weights=None)
 model.classifier = nn.Linear(model.classifier.in_features, len(classes))
 
 # ✅ LOAD MODEL
-model.load_state_dict(torch.load("best_densenet_model.pth", map_location="cpu"))
+model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
 model.eval()
 
 # ✅ TRANSFORM
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-# ✅ API
-@app.route('/predict', methods=['POST'])
-def predict():
-    file = request.files['file']
-    img = Image.open(file).convert('RGB')
-    img = transform(img).unsqueeze(0)
-
-    with torch.no_grad():
-        output = model(img)
-        probabilities = torch.nn.functional.softmax(output, dim=1)
-        confidence, pred = torch.max(probabilities, 1)
-
-    prediction = classes[pred.item()]
-    confidence_pct = round(confidence.item() * 100, 1)
-    info = disease_info.get(prediction, {})
+# ✅ ROOT ROUTE (Welcome / API index)
+@app.route("/", methods=["GET"])
+def index():
     return jsonify({
-        "prediction": prediction,
-        "confidence": confidence_pct,
-        "severity": info.get("severity", ""),
-        "description": info.get("description", ""),
-        "symptoms": info.get("symptoms", []),
-        "pesticides": info.get("pesticides", [])
-    })
+        "message": "Smart Crop Detector Backend API is running!",
+        "endpoints": {
+            "health": "/health",
+            "predict": "/predict (POST with 'file')"
+        }
+    }), 200
+
+
+# ✅ HEALTH CHECK
+@app.route("/health", methods=["GET"])
+def health():
+    """
+    Comprehensive health-check endpoint.
+    Open http://127.0.0.1:5000/health in your browser while the backend is running.
+
+    Returns:
+      - status          : "ok" if the service is running
+      - model_loaded    : True if the DenseNet-121 checkpoint loaded successfully
+      - classes         : Number of output classes configured in app.py
+      - class_names     : The exact ordered list used to map model output indices to disease names
+      - class_mapping_valid    : True when len(classes) matches the model's classifier output size
+      - class_mapping_verified : Always False — a .pth state_dict has no embedded class metadata;
+                                 verify manually against your training script
+      - preprocessing_verified : Always False — a .pth state_dict has no embedded transform metadata;
+                                 verify manually against your training script
+      - verification_warnings  : Human-readable explanations of what could not be auto-verified
+    """
+    warnings = [
+        "The checkpoint does not contain class-name metadata to verify output index order. "
+        "Manually confirm the 'classes' list in app.py matches the class-to-index mapping "
+        "used when training (e.g. torchvision ImageFolder sorts classes alphabetically by default).",
+
+        "The checkpoint does not contain training preprocessing metadata. "
+        "Confirm that the transform pipeline in app.py (Resize 224×224, ToTensor, ImageNet Normalize) "
+        "matches what was used during training."
+    ]
+
+    # Check whether the model's output size matches the class list
+    try:
+        expected_outputs = model.classifier.out_features
+        mapping_valid = (expected_outputs == len(classes))
+    except Exception:
+        mapping_valid = False
+
+    return jsonify({
+        "service": "smart-crop-detector-backend",
+        "status": "ok",
+        "model_loaded": model is not None,
+        "classes": len(classes),
+        "class_names": classes,
+        "class_mapping_valid": mapping_valid,
+        "class_mapping_verified": False,
+        "preprocessing_verified": False,
+        "verification_warnings": warnings
+    }), 200
+
+
+# ✅ PREDICT API
+@app.route("/predict", methods=["POST"])
+def predict():
+    if "file" not in request.files:
+        return jsonify({"error": "No image file was provided. Send the image under the 'file' key."}), 400
+
+    file = request.files["file"]
+
+    if not file.filename:
+        return jsonify({"error": "Please select an image."}), 400
+
+    try:
+        image_bytes = file.read()
+
+        if not image_bytes:
+            return jsonify({"error": "The uploaded file is empty."}), 400
+
+        # Double-check size (belt-and-suspenders alongside MAX_CONTENT_LENGTH)
+        if len(image_bytes) > MAX_IMAGE_SIZE:
+            return jsonify({"error": "Image is too large. Maximum allowed size is 10 MB."}), 413
+
+        # ── Verify image integrity before running inference ──
+        # image.verify() must be called on a fresh file handle
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as probe:
+                probe.verify()  # Raises if the file is corrupted or not a real image
+        except (UnidentifiedImageError, OSError, ValueError):
+            return jsonify({"error": "Invalid or unsupported image. Please upload a valid JPEG or PNG."}), 400
+
+        # ── Open again (verify() exhausts the stream) and run inference ──
+        with Image.open(io.BytesIO(image_bytes)) as pil_image:
+            img = pil_image.convert("RGB")
+
+        img_tensor = transform(img).unsqueeze(0)
+
+        # torch.inference_mode is faster than no_grad and disables grad computation
+        with torch.inference_mode():
+            output = model(img_tensor)
+            probabilities = torch.nn.functional.softmax(output, dim=1)
+            confidence, pred = torch.max(probabilities, dim=1)
+
+        prediction = classes[pred.item()]
+        confidence_pct = round(confidence.item() * 100, 1)
+        is_low_confidence = confidence_pct < 50.0
+        info = disease_info.get(prediction, {})
+
+        return jsonify({
+            "prediction": prediction,
+            "confidence": confidence_pct,
+            "low_confidence": is_low_confidence,
+            "severity": info.get("severity", ""),
+            "description": info.get("description", ""),
+            "symptoms": info.get("symptoms", []),
+            "pesticides": info.get("pesticides", [])
+        })
+
+    except (UnidentifiedImageError, OSError, ValueError):
+        return jsonify({"error": "Invalid or unsupported image. Please upload a valid image."}), 400
+
+    except Exception:
+        app.logger.exception("Prediction failed unexpectedly")
+        return jsonify({"error": "An internal error occurred during prediction. Please try again."}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

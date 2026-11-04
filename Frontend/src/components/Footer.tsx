@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import Logo from "./Logo";
 import { Leaf, Mail, Phone } from "lucide-react";
 
@@ -14,29 +15,29 @@ const Footer = () => {
             </p>
           </div>
 
-          {/* Quick Links */}
+          {/* Quick Links — using <Link> for SPA navigation (no full page reload) */}
           <div>
             <h4 className="font-display font-semibold text-foreground mb-4">Quick Links</h4>
             <ul className="space-y-2 text-sm">
               <li>
-                <a href="/" className="text-muted-foreground hover:text-primary transition-colors">
+                <Link to="/" className="text-muted-foreground hover:text-primary transition-colors">
                   Home
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="/camera-upload" className="text-muted-foreground hover:text-primary transition-colors">
+                <Link to="/camera-upload" className="text-muted-foreground hover:text-primary transition-colors">
                   Start Detection
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="/results" className="text-muted-foreground hover:text-primary transition-colors">
+                <Link to="/results" className="text-muted-foreground hover:text-primary transition-colors">
                   View Results
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="/profile" className="text-muted-foreground hover:text-primary transition-colors">
-                  My Profile
-                </a>
+                <Link to="/register" className="text-muted-foreground hover:text-primary transition-colors">
+                  Register
+                </Link>
               </li>
             </ul>
           </div>
@@ -61,8 +62,9 @@ const Footer = () => {
           </div>
         </div>
 
+        {/* Dynamic copyright year */}
         <div className="border-t border-border mt-8 pt-8 text-center text-sm text-muted-foreground">
-          <p>© 2024 Smart Crop Detector. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} Smart Crop Detector. All rights reserved.</p>
         </div>
       </div>
     </footer>

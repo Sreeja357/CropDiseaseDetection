@@ -13,18 +13,15 @@ import {
 import { useToast } from "../hooks/use-toast";
 import Logo from "../components/Logo";
 import { Eye, EyeOff, Sprout } from "lucide-react";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, signOut } from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
 import { auth, db } from "../lib/firebase";
-
 import { useAuth } from "../context/AuthContext";
 
 const Register = () => {
   const { user } = useAuth();
 
-  // Already logged in → go to home
-  if (user) return <Navigate to="/" replace />;
-
+  // All hooks must be declared before any early returns (Rules of Hooks)
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [formData, setFormData] = useState({
@@ -38,6 +35,9 @@ const Register = () => {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  // Already logged in → go to home
+  if (user) return <Navigate to="/" replace />;
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
@@ -86,44 +86,53 @@ const Register = () => {
 
     try {
       // Register with Firebase
-      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-      
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        formData.email,
+        formData.password
+      );
+
       try {
         // Save additional user data to Firestore
         await setDoc(doc(db, "users", userCredential.user.uid), {
           fullName: formData.fullName,
           email: formData.email,
           role: formData.role,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
         });
       } catch (dbError: any) {
         console.error("Firestore saving error:", dbError);
-        // Let it continue but show a warning if possible, 
-        // usually this means Firestore is not created or rules are strict.
         toast({
           title: "Warning",
-          description: "Account created but user profile couldn't be saved. Check Firestore rules.",
+          description:
+            "Account created but user profile couldn't be saved. Check Firestore rules.",
           variant: "destructive",
         });
       }
 
+      // Sign out immediately so Firebase doesn't auto-login,
+      // ensuring the user explicitly logs in through the Login screen.
+      await signOut(auth);
+
       toast({
-        title: "Registration Successful",
-        description: "Welcome to Smart Crop Detector!",
+        title: "Account Created Successfully!",
+        description: "Please enter your password to log in.",
       });
-      navigate("/login");
+      navigate("/login", { state: { email: formData.email } });
     } catch (error: any) {
       console.error("Registration error:", error);
-      let errorMessage = "Registration failed. " + (error.message || "Please try again.");
-      
-      if (error.code === 'auth/email-already-in-use') {
+      let errorMessage =
+        "Registration failed. " + (error.message || "Please try again.");
+
+      if (error.code === "auth/email-already-in-use") {
         errorMessage = "Email is already registered. Please login instead.";
-      } else if (error.code === 'auth/operation-not-allowed') {
-        errorMessage = "Email/Password sign-in is not enabled in Firebase Console.";
-      } else if (error.code === 'auth/weak-password') {
+      } else if (error.code === "auth/operation-not-allowed") {
+        errorMessage =
+          "Email/Password sign-in is not enabled in Firebase Console.";
+      } else if (error.code === "auth/weak-password") {
         errorMessage = "Password should be at least 6 characters.";
       }
-      
+
       toast({
         title: "Registration Failed",
         description: errorMessage,
@@ -146,7 +155,7 @@ const Register = () => {
             Join Smart Farming
           </h2>
           <p className="text-primary-foreground/80 text-lg">
-            Create your account and start protecting your crops with 
+            Create your account and start protecting your crops with
             AI-powered disease detection technology.
           </p>
         </div>
@@ -174,7 +183,9 @@ const Register = () => {
                 type="text"
                 placeholder="Enter your full name"
                 value={formData.fullName}
-                onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, fullName: e.target.value })
+                }
                 className={errors.fullName ? "border-destructive" : ""}
                 disabled={isLoading}
               />
@@ -190,7 +201,9 @@ const Register = () => {
                 type="email"
                 placeholder="Enter your email address"
                 value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, email: e.target.value })
+                }
                 className={errors.email ? "border-destructive" : ""}
                 disabled={isLoading}
               />
@@ -203,7 +216,9 @@ const Register = () => {
               <Label htmlFor="role">Role</Label>
               <Select
                 value={formData.role}
-                onValueChange={(value) => setFormData({ ...formData, role: value })}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, role: value })
+                }
                 disabled={isLoading}
               >
                 <SelectTrigger className={errors.role ? "border-destructive" : ""}>
@@ -228,7 +243,9 @@ const Register = () => {
                   type={showPassword ? "text" : "password"}
                   placeholder="Create a password"
                   value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({ ...formData, password: e.target.value })
+                  }
                   className={errors.password ? "border-destructive" : ""}
                   disabled={isLoading}
                 />
@@ -238,7 +255,11 @@ const Register = () => {
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   disabled={isLoading}
                 >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  {showPassword ? (
+                    <EyeOff className="w-5 h-5" />
+                  ) : (
+                    <Eye className="w-5 h-5" />
+                  )}
                 </button>
               </div>
               {errors.password && (
@@ -254,7 +275,9 @@ const Register = () => {
                   type={showConfirmPassword ? "text" : "password"}
                   placeholder="Confirm your password"
                   value={formData.confirmPassword}
-                  onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({ ...formData, confirmPassword: e.target.value })
+                  }
                   className={errors.confirmPassword ? "border-destructive" : ""}
                   disabled={isLoading}
                 />
@@ -264,15 +287,26 @@ const Register = () => {
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   disabled={isLoading}
                 >
-                  {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  {showConfirmPassword ? (
+                    <EyeOff className="w-5 h-5" />
+                  ) : (
+                    <Eye className="w-5 h-5" />
+                  )}
                 </button>
               </div>
               {errors.confirmPassword && (
-                <p className="text-sm text-destructive">{errors.confirmPassword}</p>
+                <p className="text-sm text-destructive">
+                  {errors.confirmPassword}
+                </p>
               )}
             </div>
 
-            <Button type="submit" className="w-full" size="lg" disabled={isLoading}>
+            <Button
+              type="submit"
+              className="w-full"
+              size="lg"
+              disabled={isLoading}
+            >
               {isLoading ? "Creating Account..." : "Create Account"}
             </Button>
           </form>

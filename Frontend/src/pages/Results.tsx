@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import jsPDF from "jspdf";
 import { Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Separator } from "../components/ui/separator";
+import { useToast } from "../hooks/use-toast";
 import {
   AlertTriangle,
   Bug,
@@ -15,7 +17,28 @@ import {
   FlaskConical,
   Info,
   ArrowLeft,
+  Clock,
 } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
+import { db } from "../lib/firebase";
+import { collection, query, orderBy, limit, getDocs } from "firebase/firestore";
+
+// Strongly typed interface for pesticide objects
+interface Pesticide {
+  name: string;
+  dosage: string;
+  application: string;
+  type: string;
+}
+
+// History record from Firestore
+interface ScanRecord {
+  id: string;
+  prediction: string;
+  confidence: number;
+  severity: string;
+  createdAt: string;
+}
 
 // Prevention tips based on crop type
 const preventionTips: Record<string, string[]> = {
@@ -75,32 +98,84 @@ const getPreventionTips = (prediction: string | null): string[] => {
   return preventionTips.default;
 };
 
+/**
+ * Safely parses a JSON string from sessionStorage into a typed array.
+ * Returns an empty array instead of throwing when the value is null,
+ * undefined, or contains invalid JSON.
+ */
+const parseStoredArray = <T,>(value: string | null): T[] => {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+};
+
 const Results = () => {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const navigate = useNavigate();
   const [prediction, setPrediction] = useState<string | null>(null);
   const [detectionImage, setDetectionImage] = useState<string | null>(null);
   const [confidence, setConfidence] = useState<number>(0);
+  const [lowConfidence, setLowConfidence] = useState(false);
   const [severity, setSeverity] = useState("");
   const [description, setDescription] = useState("");
   const [symptoms, setSymptoms] = useState<string[]>([]);
-  const [pesticides, setPesticides] = useState<any[]>([]);
+  const [pesticides, setPesticides] = useState<Pesticide[]>([]);
+  const [recentScans, setRecentScans] = useState<ScanRecord[]>([]);
+  const [hasData, setHasData] = useState(false);
 
   useEffect(() => {
     const storedImage = sessionStorage.getItem("detectionImage");
     const storedPrediction = sessionStorage.getItem("prediction");
     const storedConfidence = sessionStorage.getItem("confidence");
+    const storedLowConfidence = sessionStorage.getItem("lowConfidence");
     const storedSeverity = sessionStorage.getItem("severity");
     const storedDescription = sessionStorage.getItem("description");
     const storedSymptoms = sessionStorage.getItem("symptoms");
     const storedPesticides = sessionStorage.getItem("pesticides");
 
+    // If no scan data exists, inform user and redirect back to camera-upload page
+    if (!storedPrediction) {
+      toast({
+        title: "No Scan Found",
+        description: "Please upload or capture a crop leaf image first.",
+      });
+      navigate("/camera-upload", { replace: true });
+      return;
+    }
+
+    setHasData(true);
     if (storedImage) setDetectionImage(storedImage);
     if (storedPrediction) setPrediction(storedPrediction);
-    if (storedConfidence) setConfidence(parseFloat(storedConfidence));
+    if (storedConfidence) {
+      const confNum = parseFloat(storedConfidence);
+      setConfidence(confNum);
+      setLowConfidence(storedLowConfidence === "true" || confNum < 50);
+    }
     if (storedSeverity) setSeverity(storedSeverity);
     if (storedDescription) setDescription(storedDescription);
-    if (storedSymptoms) setSymptoms(JSON.parse(storedSymptoms));
-    if (storedPesticides) setPesticides(JSON.parse(storedPesticides));
-  }, []);
+    if (storedSymptoms) setSymptoms(parseStoredArray<string>(storedSymptoms));
+    if (storedPesticides) setPesticides(parseStoredArray<Pesticide>(storedPesticides));
+
+    // Fetch recent scans for this user from Firestore
+    if (user?.uid) {
+      const scansRef = collection(db, "users", user.uid, "scans");
+      const q = query(scansRef, orderBy("createdAt", "desc"), limit(5));
+      getDocs(q)
+        .then((snapshot) => {
+          const list: ScanRecord[] = [];
+          snapshot.forEach((item) => {
+            list.push({ id: item.id, ...(item.data() as Omit<ScanRecord, "id">) });
+          });
+          setRecentScans(list);
+        })
+        .catch((err) => console.warn("Failed to load recent scans:", err));
+    }
+  }, [navigate, user]);
 
   const getSeverityColor = (severity: string) => {
     switch (severity.toLowerCase()) {
@@ -153,9 +228,10 @@ const Results = () => {
     doc.text(`Generated: ${new Date().toLocaleString()}`, margin, y);
     y += 10;
 
-    // ── Section: Detection Result ──
+    // ── Section: Detection Result & Photo ──
+    const cardH = 40;
     doc.setFillColor(240, 248, 240);
-    doc.roundedRect(margin, y, contentW, 38, 3, 3, "F");
+    doc.roundedRect(margin, y, contentW, cardH, 3, 3, "F");
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(30, 90, 30);
@@ -163,11 +239,11 @@ const Results = () => {
 
     // Severity badge
     const sevColor: Record<string, [number, number, number]> = {
-      none:     [34, 139, 34],
-      low:      [34, 139, 34],
+      none: [34, 139, 34],
+      low: [34, 139, 34],
       moderate: [200, 150, 0],
-      high:     [200, 80, 0],
-      severe:   [180, 0, 0],
+      high: [200, 80, 0],
+      severe: [180, 0, 0],
     };
     const [sr, sg, sb] = sevColor[severity.toLowerCase()] ?? [100, 100, 100];
     doc.setFillColor(sr, sg, sb);
@@ -184,7 +260,23 @@ const Results = () => {
     doc.setFont("helvetica", "normal");
     doc.setTextColor(60, 60, 60);
     doc.text(`Confidence: ${confidence}%`, margin + 4, y + 33);
-    y += 46;
+
+    // ✅ Embed leaf photo into the PDF report
+    if (detectionImage) {
+      try {
+        const imgSize = 34;
+        const imgX = margin + contentW - imgSize - 3;
+        const imgY = y + 3;
+        doc.addImage(detectionImage, "JPEG", imgX, imgY, imgSize, imgSize);
+        doc.setDrawColor(34, 139, 34);
+        doc.setLineWidth(0.3);
+        doc.rect(imgX, imgY, imgSize, imgSize);
+      } catch (imgErr) {
+        console.warn("Could not embed image into PDF:", imgErr);
+      }
+    }
+
+    y += cardH + 8;
 
     // ── Section: Description ──
     if (description) {
@@ -244,7 +336,11 @@ const Results = () => {
       pesticides.forEach((p, i) => {
         checkNewPage(28);
         // Row background
-        doc.setFillColor(i % 2 === 0 ? 245 : 255, i % 2 === 0 ? 250 : 255, i % 2 === 0 ? 245 : 255);
+        doc.setFillColor(
+          i % 2 === 0 ? 245 : 255,
+          i % 2 === 0 ? 250 : 255,
+          i % 2 === 0 ? 245 : 255
+        );
         doc.rect(margin, y - 3, contentW, 24, "F");
         doc.setFontSize(10);
         doc.setFont("helvetica", "bold");
@@ -260,7 +356,10 @@ const Results = () => {
         doc.setFontSize(9);
         doc.setTextColor(80, 80, 80);
         doc.text(`Dosage: ${p.dosage}`, margin + 3, y + 11);
-        const appLines = doc.splitTextToSize(`Application: ${p.application}`, contentW - 6);
+        const appLines = doc.splitTextToSize(
+          `Application: ${p.application}`,
+          contentW - 6
+        );
         doc.text(appLines, margin + 3, y + 17);
         y += 26;
       });
@@ -305,6 +404,9 @@ const Results = () => {
 
     doc.save("crop_disease_report.pdf");
   };
+
+  // Show nothing while checking for data (redirect happens in useEffect)
+  if (!hasData) return null;
 
   return (
     <div className="min-h-screen pt-20 pb-12 bg-background">
@@ -351,15 +453,58 @@ const Results = () => {
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Recent Scans History from Firestore */}
+              {recentScans.length > 0 && (
+                <Card className="shadow-card mt-6">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="font-display text-base flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-primary" />
+                      Recent Scans History
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2.5">
+                    {recentScans.map((scan) => (
+                      <div
+                        key={scan.id}
+                        className="p-2.5 rounded-lg bg-secondary/40 text-xs border border-border/60 hover:bg-secondary/60 transition-colors"
+                      >
+                        <div className="flex items-center justify-between font-medium text-foreground mb-1">
+                          <span className="line-clamp-1">{scan.prediction}</span>
+                          <Badge variant="outline" className="text-[10px] py-0 px-1.5 ml-2 shrink-0">
+                            {scan.confidence}%
+                          </Badge>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          {new Date(scan.createdAt).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
             </div>
 
             {/* Results */}
             <div className="lg:col-span-2 space-y-6">
               {/* Detection Status */}
-              <Card className={`shadow-card border-l-4 ${isHealthy ? "border-l-green-500" : "border-l-primary"}`}>
+              <Card
+                className={`shadow-card border-l-4 ${
+                  isHealthy ? "border-l-green-500" : "border-l-primary"
+                }`}
+              >
                 <CardContent className="pt-6">
                   <div className="flex items-start gap-4">
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${isHealthy ? "bg-green-500/10" : "bg-primary/10"}`}>
+                    <div
+                      className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
+                        isHealthy ? "bg-green-500/10" : "bg-primary/10"
+                      }`}
+                    >
                       {isHealthy ? (
                         <CheckCircle2 className="w-6 h-6 text-green-500" />
                       ) : (
@@ -386,6 +531,21 @@ const Results = () => {
                           {confidence}% Confidence
                         </span>
                       </div>
+
+                      {/* Low-confidence advisory banner */}
+                      {(lowConfidence || confidence < 50) && (
+                        <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-start gap-3">
+                          <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                          <div className="text-sm">
+                            <p className="font-semibold text-amber-800 dark:text-amber-300">
+                              Low Confidence Advisory ({confidence}%)
+                            </p>
+                            <p className="text-amber-700 dark:text-amber-400 mt-0.5 text-xs">
+                              The AI model is uncertain about this prediction. Ensure the photo is clear, well-lit, centered on a single affected crop leaf, and belongs to Maize, Cassava, Tomato, or Cashew.
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -509,4 +669,5 @@ const Results = () => {
     </div>
   );
 };
-export default Results;
+
+export default Results;

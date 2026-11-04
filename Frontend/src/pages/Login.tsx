@@ -1,9 +1,8 @@
-import { useState } from "react";
-import { Link, useNavigate, Navigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { Checkbox } from "../components/ui/checkbox";
 import { useToast } from "../hooks/use-toast";
 import Logo from "../components/Logo";
 import { Eye, EyeOff, Leaf } from "lucide-react";
@@ -13,22 +12,32 @@ import { useAuth } from "../context/AuthContext";
 
 const Login = () => {
   const { user } = useAuth();
-  const [showPassword, setShowPassword] = useState(false);
+  const location = useLocation();
+  const prefilledEmail = (location.state as { email?: string })?.email || "";
 
-  // Already logged in → go to home
-  if (user) return <Navigate to="/" replace />;
+  // All hooks must be declared before any early returns (Rules of Hooks)
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
-    email: "",
+    email: prefilledEmail,
     password: "",
-    rememberMe: false,
   });
   const { toast } = useToast();
   const navigate = useNavigate();
 
+  // If redirected from registration with an email in state, prefill it
+  useEffect(() => {
+    if (prefilledEmail) {
+      setFormData((prev) => ({ ...prev, email: prefilledEmail }));
+    }
+  }, [prefilledEmail]);
+
+  // Already logged in → go to home
+  if (user) return <Navigate to="/" replace />;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!formData.email || !formData.password) {
       toast({
         title: "Error",
@@ -42,24 +51,27 @@ const Login = () => {
 
     try {
       await signInWithEmailAndPassword(auth, formData.email, formData.password);
-      
+
       toast({
         title: "Login Successful",
         description: "Welcome back to Smart Crop Detector!",
       });
-      navigate("/");
+
+      // Redirect back to intended page (e.g. /camera-upload) or home
+      const destination = (location.state as any)?.from?.pathname || "/camera-upload";
+      navigate(destination, { replace: true });
     } catch (error: any) {
       console.error("Login error:", error);
       let errorMessage = "Invalid email or password";
-      
-      if (error.code === 'auth/user-not-found') {
+
+      if (error.code === "auth/user-not-found") {
         errorMessage = "No account found with this email";
-      } else if (error.code === 'auth/wrong-password') {
+      } else if (error.code === "auth/wrong-password") {
         errorMessage = "Incorrect password";
-      } else if (error.code === 'auth/invalid-credential') {
+      } else if (error.code === "auth/invalid-credential") {
         errorMessage = "Invalid email or password";
       }
-      
+
       toast({
         title: "Login Failed",
         description: errorMessage,
@@ -121,20 +133,6 @@ const Login = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="remember"
-                checked={formData.rememberMe}
-                onCheckedChange={(checked) =>
-                  setFormData({ ...formData, rememberMe: checked as boolean })
-                }
-                disabled={isLoading}
-              />
-              <Label htmlFor="remember" className="text-sm font-normal cursor-pointer">
-                Remember me
-              </Label>
-            </div>
-
             <Button type="submit" className="w-full" size="lg" disabled={isLoading}>
               {isLoading ? "Signing in..." : "Sign In"}
             </Button>
@@ -159,7 +157,7 @@ const Login = () => {
             Protect Your Harvest
           </h2>
           <p className="text-primary-foreground/80 text-lg">
-            Join thousands of farmers using AI-powered crop disease detection to 
+            Join thousands of farmers using AI-powered crop disease detection to
             save their crops and increase yields.
           </p>
         </div>

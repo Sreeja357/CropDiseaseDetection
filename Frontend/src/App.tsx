@@ -15,11 +15,12 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 
 const queryClient = new QueryClient();
 
-// Protected route: redirects to /login if not authenticated
+// Protected route: redirects to /login if not authenticated, remembering target page
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();
+  const location = useLocation();
   if (loading) return null;
-  return user ? <>{children}</> : <Navigate to="/login" replace />;
+  return user ? <>{children}</> : <Navigate to="/login" state={{ from: location }} replace />;
 };
 
 // Layout wrapper to conditionally show navbar/footer

@@ -1,11 +1,23 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { useToast } from "../hooks/use-toast";
-import { Camera, Upload, X, Scan, ImageIcon, RotateCcw } from "lucide-react";
+import { Camera, Upload, X, Scan, ImageIcon, RotateCcw, Sparkles } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
+import { db } from "../lib/firebase";
+import { collection, addDoc } from "firebase/firestore";
+
+// Sample images for 1-click viva / presentation testing
+import sampleHealthy from "../assets/leaf-closeup.jpg";
+import sampleSpotted from "../assets/sample-spotted-leaf.jpg";
+import sampleMosaic from "../assets/sample-mosaic-leaf.jpg";
+
+// Backend URL from environment variable — set VITE_API_BASE_URL in Frontend/.env
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:5000";
 
 const CameraUpload = () => {
+  const { user } = useAuth();
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -14,6 +26,31 @@ const CameraUpload = () => {
   const streamRef = useRef<MediaStream | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  const demoSamples = [
+    {
+      src: sampleHealthy,
+      label: "Healthy Crop Leaf",
+      category: "Normal / Healthy",
+    },
+    {
+      src: sampleSpotted,
+      label: "Leaf Spot Symptoms",
+      category: "Fungal Spot",
+    },
+    {
+      src: sampleMosaic,
+      label: "Mosaic Pattern",
+      category: "Viral Symptoms",
+    },
+  ];
+
+  // ✅ Stop camera tracks when the component unmounts (prevents ghost camera indicator)
+  useEffect(() => {
+    return () => {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
 
   const startCamera = async () => {
     try {
@@ -69,6 +106,16 @@ const CameraUpload = () => {
         return;
       }
 
+      // Reject files larger than 10 MB
+      if (file.size > 10 * 1024 * 1024) {
+        toast({
+          title: "File Too Large",
+          description: "Please upload an image smaller than 10 MB.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const reader = new FileReader();
       reader.onloadend = () => {
         setSelectedImage(reader.result as string);
@@ -84,8 +131,6 @@ const CameraUpload = () => {
     }
   };
 
-
-
   const handleDetect = async () => {
     if (!selectedImage) {
       toast({
@@ -99,34 +144,64 @@ const CameraUpload = () => {
     setIsAnalyzing(true);
 
     try {
-      // Convert base64 image to file
+      // Convert base64 image to blob
       const res = await fetch(selectedImage);
       const blob = await res.blob();
       const formData = new FormData();
       formData.append("file", blob, "image.jpg");
-      const response = await fetch("http://127.0.0.1:5000/predict", {
+
+      const response = await fetch(`${API_BASE_URL}/predict`, {
         method: "POST",
         body: formData,
       });
 
+      // Parse JSON first so error bodies from the server can be read
       const data = await response.json();
 
-      // Store both image + result
+      // Check HTTP status — a non-ok response carries an "error" field
+      if (!response.ok) {
+        throw new Error(data.error || data.message || `Server error (${response.status})`);
+      }
+
+      // Validate the response shape before trusting it
+      if (!data.prediction || typeof data.confidence !== "number") {
+        throw new Error("The server returned an invalid prediction. Please try again.");
+      }
+
+      // ✅ Store result in session storage for Results page
       sessionStorage.setItem("detectionImage", selectedImage);
       sessionStorage.setItem("prediction", data.prediction);
       sessionStorage.setItem("confidence", String(data.confidence));
-      sessionStorage.setItem("severity", data.severity);
-      sessionStorage.setItem("description", data.description);
-      sessionStorage.setItem("symptoms", JSON.stringify(data.symptoms));
-      sessionStorage.setItem("pesticides", JSON.stringify(data.pesticides));
+      sessionStorage.setItem("lowConfidence", String(data.low_confidence ?? (data.confidence < 50)));
+      sessionStorage.setItem("severity", data.severity ?? "");
+      sessionStorage.setItem("description", data.description ?? "");
+      sessionStorage.setItem("symptoms", JSON.stringify(data.symptoms ?? []));
+      sessionStorage.setItem("pesticides", JSON.stringify(data.pesticides ?? []));
+
+      // ✅ Save detection scan to Firestore for user history
+      if (user?.uid) {
+        try {
+          await addDoc(collection(db, "users", user.uid, "scans"), {
+            prediction: data.prediction,
+            confidence: data.confidence,
+            severity: data.severity ?? "Moderate",
+            createdAt: new Date().toISOString(),
+          });
+        } catch (dbErr) {
+          console.warn("Could not save scan to Firestore:", dbErr);
+        }
+      }
+
       setIsAnalyzing(false);
       navigate("/results");
-    } catch (error) {
-      console.error("Error:", error);
+    } catch (error: any) {
+      console.error("Detection error:", error);
       setIsAnalyzing(false);
       toast({
         title: "Detection Failed",
-        description: "Could not connect to the detection server. Please make sure the backend is running.",
+        description:
+          error?.message ||
+          "Could not connect to the detection server. Please make sure the backend is running.",
         variant: "destructive",
       });
     }
@@ -205,11 +280,7 @@ const CameraUpload = () => {
                       <X className="w-5 h-5 mr-2" />
                       Cancel
                     </Button>
-                    <Button
-                      size="lg"
-                      onClick={captureImage}
-                      className="w-full"
-                    >
+                    <Button size="lg" onClick={captureImage} className="w-full">
                       <Camera className="w-5 h-5 mr-2" />
                       Capture
                     </Button>
@@ -268,6 +339,49 @@ const CameraUpload = () => {
             </CardContent>
           </Card>
 
+          {/* Sample Images for Viva / Quick Testing */}
+          <div className="mt-6 p-5 bg-card/60 backdrop-blur border border-primary/20 rounded-xl shadow-sm">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-primary" />
+                <h3 className="font-display text-sm font-semibold text-foreground">
+                  Quick Demo: Try with Sample Images
+                </h3>
+              </div>
+              <span className="text-xs text-muted-foreground">Click to load instantly</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {demoSamples.map((sample, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    setSelectedImage(sample.src);
+                    toast({
+                      title: "Sample Loaded",
+                      description: `Loaded "${sample.label}". Click "Detect Disease" to run AI inference!`,
+                    });
+                  }}
+                  className="group p-2 rounded-lg bg-background border border-border hover:border-primary/60 hover:shadow-md transition-all text-left flex flex-col items-center"
+                >
+                  <div className="w-full aspect-[4/3] rounded overflow-hidden mb-2 bg-secondary/50 border border-border/50">
+                    <img
+                      src={sample.src}
+                      alt={sample.label}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                  </div>
+                  <p className="text-xs font-semibold text-foreground text-center line-clamp-1 w-full">
+                    {sample.label}
+                  </p>
+                  <p className="text-[10px] text-primary text-center">
+                    {sample.category}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Tips */}
           <div className="mt-8 p-6 bg-secondary/30 rounded-xl">
             <h3 className="font-display font-semibold text-foreground mb-3">
@@ -290,6 +404,10 @@ const CameraUpload = () => {
                 <span className="text-primary">•</span>
                 Include both healthy and affected parts if possible
               </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary">•</span>
+                Maximum image size: 10 MB
+              </li>
             </ul>
           </div>
         </div>
@@ -297,4 +415,5 @@ const CameraUpload = () => {
     </div>
   );
 };
+
 export default CameraUpload;
