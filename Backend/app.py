@@ -251,6 +251,11 @@ model.classifier = nn.Linear(model.classifier.in_features, len(classes))
 model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
 model.eval()
 
+if not os.path.exists(MODEL_PATH):
+    raise Exception("Model file not found! Make sure best_densenet_model.pth is in repo")
+
+model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+model.eval()
 # ✅ TRANSFORM
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -383,5 +388,7 @@ def predict():
         return jsonify({"error": "An internal error occurred during prediction. Please try again."}), 500
 
 
+# ✅ IMPORTANT: Render PORT FIX
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 10000))  # Render provides PORT
+    app.run(host="0.0.0.0", port=port)
