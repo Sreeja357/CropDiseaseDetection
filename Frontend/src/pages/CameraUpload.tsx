@@ -13,8 +13,9 @@ import sampleHealthy from "../assets/leaf-closeup.jpg";
 import sampleSpotted from "../assets/sample-spotted-leaf.jpg";
 import sampleMosaic from "../assets/sample-mosaic-leaf.jpg";
 
-// Backend URL from environment variable — set VITE_API_BASE_URL in Frontend/.env
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:5000";
+// Backend URL from environment variable — trim spaces and trailing slashes to prevent invalid URLs
+const rawApiUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:5000") as string;
+const API_BASE_URL = rawApiUrl.trim().replace(/\/+$/, "");
 
 const CameraUpload = () => {
   const { user } = useAuth();
